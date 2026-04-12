@@ -108,12 +108,22 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   // --- CONFIRM & SAVE TO DATABASE ---
   // --- CONFIRM & SAVE TO DATABASE ---
   // --- CONFIRM & SAVE TO DATABASE ---
+  // --- CONFIRM & SAVE TO DATABASE (LOUD DEBUG VERSION) ---
   const confirmTransaction = async () => {
-    if (!pendingScan || !sessionData.boss_id || !transactionType) return;
+    // 1. LOUD SAFETY CHECKS
+    if (!pendingScan) return alert("FAIL: No barcode detected in memory.");
+    if (!transactionType) return alert("FAIL: App forgot if you clicked Add or Sell.");
+    if (!sessionData.boss_id) {
+      alert("CRITICAL FAIL: Your Staff account has no 'boss_id'! The app doesn't know whose inventory to update. Log out, fix the staff account in Supabase, and log back in.");
+      return;
+    }
+
     setIsProcessing(true);
 
     try {
-      // 1. Check if the item is already on the Boss's shelf
+      console.log("Searching for:", pendingScan, "for Boss:", sessionData.boss_id);
+
+      // 2. Check live_inventory
       const { data: inventoryItem, error: invError } = await supabase
         .from('live_inventory')
         .select('id, quantity')
@@ -121,16 +131,18 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         .eq('factory_barcode', pendingScan) 
         .maybeSingle();
 
-      if (invError) console.error("Inventory Fetch Error:", invError);
+      if (invError) alert("Supabase Inventory Fetch Error: " + invError.message);
 
       let finalCarName = "Unknown Vehicle";
 
-      // 2. We MUST check the Dictionary to get the car name for the History Log
-      const { data: dictItem } = await supabase
+      // 3. Check Dictionary
+      const { data: dictItem, error: dictError } = await supabase
         .from('barcode_dictionary')
         .select('master_sku')
         .eq('factory_barcode', pendingScan)
         .maybeSingle();
+
+      if (dictError) alert("Supabase Dictionary Error: " + dictError.message);
 
       if (!dictItem) {
         alert("Unrecognized Barcode! This glass does not exist in the master dictionary.");
@@ -140,42 +152,49 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
       finalCarName = dictItem.master_sku;
 
-      // 3. Update or Insert into Live Inventory (STRICTLY Boss ID & Barcode)
+      // 4. Update or Insert
       if (inventoryItem) {
-        // --- SCENARIO A: UPDATE QUANTITY ---
+        // --- UPDATE ---
         const newQuantity = transactionType === 'RESTOCK' 
           ? inventoryItem.quantity + 1 
           : Math.max(0, inventoryItem.quantity - 1); 
         
-        const { error: updateError } = await supabase
+        console.log("Updating item", inventoryItem.id, "to quantity:", newQuantity);
+
+        const { error: updateError, data: updateData } = await supabase
           .from('live_inventory')
           .update({ quantity: newQuantity })
-          .eq('id', inventoryItem.id);
+          .eq('id', inventoryItem.id)
+          .select(); // Ask Supabase to return the updated row
 
         if (updateError) throw updateError;
+        if (!updateData || updateData.length === 0) alert("WARNING: Supabase didn't report an error, but it also didn't update the row. This is usually Row Level Security (RLS) blocking you.");
 
       } else {
-        // --- SCENARIO B: INSERT NEW ITEM ---
+        // --- INSERT ---
         if (transactionType === 'SOLD_OFFLINE') {
           alert("Cannot sell: This barcode is not in your inventory yet.");
           setIsProcessing(false);
           return;
         }
 
-        // ONLY send boss_id, factory_barcode, and quantity!
-        const { error: insertError } = await supabase
+        console.log("Inserting brand new item...");
+
+        const { error: insertError, data: insertData } = await supabase
           .from('live_inventory')
           .insert([{
             boss_id: sessionData.boss_id,
             factory_barcode: pendingScan, 
             quantity: 1
-          }]);
+          }])
+          .select(); // Ask Supabase to return the inserted row
 
         if (insertError) throw insertError;
+        if (!insertData || insertData.length === 0) alert("WARNING: Supabase silently blocked the insert. Check your RLS policies.");
       }
 
-      // 4. Write to the History Ledger
-      await supabase
+      // 5. History Ledger
+      const { error: ledgerError } = await supabase
         .from('inventory_transactions')
         .insert([{
           boss_id: sessionData.boss_id,
@@ -185,6 +204,8 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           transaction_type: transactionType
         }]);
 
+      if (ledgerError) alert("Ledger Error: " + ledgerError.message);
+
       // Success cleanup
       setPendingScan(null);
       setTransactionType(null);
@@ -192,7 +213,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       
     } catch (err: any) {
       console.error("Transaction Error:", err);
-      alert("Database Error: " + err.message);
+      alert("Hard Database Error: " + err.message);
     } finally {
       setIsProcessing(false);
     }
