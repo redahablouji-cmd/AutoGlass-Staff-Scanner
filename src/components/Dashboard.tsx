@@ -109,34 +109,83 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     if (!pendingScan || !sessionData.boss_id || !transactionType) return;
     setIsProcessing(true);
 
-    const { data: itemData, error: itemError } = await supabase
-      .from('live_inventory')
-      .select('car_brand, car_model, quantity')
-      .eq('boss_id', sessionData.boss_id)
-      .eq('barcode', pendingScan)
-      .single();
+    try {
+      // 1. Look for the item in the Seller's actual inventory
+      // IMPORTANT: If your live_inventory table uses 'factory_barcode' instead of 'barcode', change it below!
+      const { data: inventoryItem, error: invError } = await supabase
+        .from('live_inventory')
+        .select('*')
+        .eq('boss_id', sessionData.boss_id)
+        .eq('barcode', pendingScan) // <-- Change 'barcode' to 'factory_barcode' if needed
+        .maybeSingle(); // This magic word prevents the crash if it returns 0 rows
 
-    if (itemError || !itemData) {
-      alert("Error: Barcode not found in inventory!");
+      let finalCarName = "Unknown Vehicle";
+
+      if (inventoryItem) {
+        // --- SCENARIO A: ITEM IS ALREADY IN INVENTORY ---
+        finalCarName = inventoryItem.master_sku || inventoryItem.car_model || "Auto Glass";
+        
+        // Don't let inventory drop below 0 on a sale
+        const newQuantity = transactionType === 'RESTOCK' ? inventoryItem.quantity + 1 : Math.max(0, inventoryItem.quantity - 1);
+        
+        await supabase
+          .from('live_inventory')
+          .update({ quantity: newQuantity })
+          .eq('id', inventoryItem.id);
+
+      } else {
+        // --- SCENARIO B: ITEM IS NOT IN INVENTORY YET ---
+        if (transactionType === 'SOLD_OFFLINE') {
+          alert("Cannot sell: This barcode is not in your inventory yet.");
+          setIsProcessing(false);
+          return;
+        }
+
+        // If they are Adding (+), look it up in the Master Dictionary
+        const { data: dictItem } = await supabase
+          .from('barcode_dictionary')
+          .select('master_sku')
+          .eq('factory_barcode', pendingScan)
+          .maybeSingle();
+
+        if (!dictItem) {
+          alert("Unrecognized Barcode! Not found in Dictionary.");
+          setIsProcessing(false);
+          return;
+        }
+
+        finalCarName = dictItem.master_sku;
+
+        // Insert a brand new row into Live Inventory!
+        await supabase
+          .from('live_inventory')
+          .insert([{
+            boss_id: sessionData.boss_id,
+            barcode: pendingScan, // <-- Change to 'factory_barcode' if needed to match your table
+            master_sku: dictItem.master_sku, 
+            quantity: 1
+          }]);
+      }
+
+      // 3. Write to the History Ledger
+      await supabase.from('inventory_transactions').insert([{
+        boss_id: sessionData.boss_id,
+        staff_scanner_id: sessionData.scanner_id,
+        barcode: pendingScan,
+        car_model_snapshot: finalCarName,
+        transaction_type: transactionType
+      }]);
+
+      // Success cleanup
+      setPendingScan(null);
+      setTransactionType(null);
+      
+    } catch (err) {
+      console.error("Transaction Error:", err);
+      alert("An error occurred processing this scan.");
+    } finally {
       setIsProcessing(false);
-      return;
     }
-
-    const carName = `${itemData.car_brand} ${itemData.car_model}`;
-    const newQuantity = transactionType === 'RESTOCK' ? itemData.quantity + 1 : itemData.quantity - 1;
-    
-    await supabase.from('live_inventory').update({ quantity: newQuantity }).eq('boss_id', sessionData.boss_id).eq('barcode', pendingScan);
-    await supabase.from('inventory_transactions').insert([{
-      boss_id: sessionData.boss_id,
-      staff_scanner_id: sessionData.scanner_id,
-      barcode: pendingScan,
-      car_model_snapshot: carName,
-      transaction_type: transactionType
-    }]);
-
-    setIsProcessing(false);
-    setPendingScan(null);
-    setTransactionType(null);
   };
 
   const handleLogoutClick = () => {
