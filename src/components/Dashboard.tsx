@@ -51,14 +51,22 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       }
     };
   }, [scanMethod]);
-
-  const stopCamera = (isSuccess = false) => {
+// 🌟 THE SAFE, CRASH-PROOF STOP FUNCTION 🌟
+  const stopCamera = async (isSuccess = false) => {
     if (scannerRef.current) {
-      scannerRef.current.stop().then(() => {
-        scannerRef.current?.clear();
-        scannerRef.current = null;
-      }).catch(() => {});
+      try {
+        // 1. Tell the physical camera to turn off, and WAIT for it to finish
+        await scannerRef.current.stop();
+        // 2. Clear the video feed from memory
+        scannerRef.current.clear();
+      } catch (err) {
+        // Ignore errors if they clicked X while it was still booting up
+        console.log("Camera safely aborted.");
+      }
+      scannerRef.current = null;
     }
+    
+    // 3. NOW that the camera is safely off, tell React to close the UI window
     setScanMethod(null);
     if (!isSuccess) setTransactionType(null); 
   };
