@@ -14,7 +14,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [recentScans, setRecentScans] = useState<any[]>([]); // Initialize as empty array to prevent white screen
+  const [recentScans, setRecentScans] = useState<any[]>([]); 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -22,39 +22,58 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
   const sessionData = JSON.parse(localStorage.getItem('staff_session') || '{}');
   const staffName = sessionData.first_name || "Staff";
-  // Safely grab either seller_id or boss_id depending on your retail_staff table structure
   const activeBossId = sessionData.seller_id || sessionData.boss_id; 
 
   // --- HARDWARE-SAFE CAMERA LOGIC ---
+  const stopCamera = async (isSuccess = false) => {
+    if (scannerRef.current) {
+      try {
+        await scannerRef.current.stop();
+      } catch (err) { /* ignore safe abort */ }
+      try {
+        scannerRef.current.clear();
+      } catch (err) { /* ignore clear abort */ }
+      scannerRef.current = null;
+    }
+    setScanMethod(null);
+    if (!isSuccess) setTransactionType(null); 
+  };
+
   useEffect(() => {
-    let isMounted = true; // Safety switch to prevent ghost crashes
+    let isMounted = true;
 
     if (scanMethod === 'camera') {
-      // WAIT 100ms for React to physically draw the black screen before turning on the lens
+      // Give React 150ms to physically draw the black screen before turning on the lens
       setTimeout(() => {
         if (!isMounted) return;
+        
+        try {
+          const scanner = new Html5Qrcode("camera-reader");
+          scannerRef.current = scanner;
 
-        const scanner = new Html5Qrcode("camera-reader");
-        scannerRef.current = scanner;
-
-        scanner.start(
-          { facingMode: "environment" },
-          { fps: 10, qrbox: { width: 300, height: 150 } },
-          (decodedText) => {
-            if (!isMounted) return;
-            handleSuccessfulScan(decodedText);
-          },
-          (error) => { /* Ignore background frame errors */ }
-        ).catch((err) => {
-          if (!isMounted) return;
-          console.error("Camera Boot Error:", err);
-          alert("Camera blocked. Please refresh the page and allow permissions.");
-          stopCamera(false);
-        });
-      }, 100);
+          scanner.start(
+            { facingMode: "environment" },
+            { fps: 10, qrbox: { width: 300, height: 150 } },
+            (decodedText) => {
+              if (!isMounted) return;
+              stopCamera(true).then(() => {
+                setPendingScan(decodedText);
+              });
+            },
+            (error) => { /* ignore background scan errors */ }
+          ).catch((err) => {
+            if (isMounted) {
+              alert("Camera blocked. Please refresh the page and allow permissions.");
+              stopCamera(false);
+            }
+          });
+        } catch (err) {
+          console.error(err);
+        }
+      }, 150); 
     }
 
-    // Cleanup function if the user aggressively closes the window
+    // Cleanup: If user hits Back or closes app, force camera off safely
     return () => {
       isMounted = false;
       if (scannerRef.current) {
@@ -63,34 +82,20 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     };
   }, [scanMethod]);
 
-  // Handle a successful barcode read
-  const handleSuccessfulScan = async (text: string) => {
-    if (scannerRef.current) {
-      try {
-        await scannerRef.current.stop();
-        scannerRef.current.clear();
-      } catch (e) {}
-      scannerRef.current = null;
-    }
-    setScanMethod(null);
-    setPendingScan(text); // Locks in the barcode!
-  };
+  // --- IMAGE FILE LOGIC ---
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  // Handle the user clicking the Cancel "X" button
-  const stopCamera = async (isSuccess = false) => {
-    if (scannerRef.current) {
-      try {
-        // Safely ask the camera hardware to power down
-        await scannerRef.current.stop();
-        scannerRef.current.clear();
-      } catch (err) {
-        console.log("Camera safely aborted during boot sequence.");
-      }
-      scannerRef.current = null;
+    const html5QrCode = new Html5Qrcode("hidden-file-reader");
+    try {
+      const decodedText = await html5QrCode.scanFile(file, true);
+      setPendingScan(decodedText);
+    } catch (err) {
+      alert("Could not find a clear barcode in this image.");
+      setTransactionType(null);
     }
-    
-    setScanMethod(null);
-    if (!isSuccess) setTransactionType(null); 
+    if (fileInputRef.current) fileInputRef.current.value = ''; 
   };
 
   // --- SAFE HISTORY FETCH ---
@@ -107,7 +112,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         .gte('created_at', today.toISOString())
         .order('created_at', { ascending: false });
 
-      // Prevent white screen crash if data comes back null
       if (error || !data) {
         setRecentScans([]); 
       } else {
@@ -115,7 +119,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       }
     };
     fetchHistory();
-  }, [refreshTrigger]);
+  }, [refreshTrigger, activeBossId, sessionData.scanner_id]);
 
   // --- STRICT DATABASE TRANSACTION ---
   const confirmTransaction = async () => {
@@ -123,11 +127,10 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     setIsProcessing(true);
 
     try {
-      // 1. Check Live Inventory using seller_id
       const { data: inventoryItem, error: invError } = await supabase
         .from('live_inventory')
         .select('inventory_id, quantity') 
-        .eq('seller_id', activeBossId) // FIXED: Matches your table
+        .eq('seller_id', activeBossId) 
         .eq('factory_barcode', pendingScan) 
         .maybeSingle();
 
@@ -137,7 +140,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         return;
       }
 
-      // 2. Get Name from Dictionary
       const { data: dictItem } = await supabase
         .from('barcode_dictionary')
         .select('master_sku')
@@ -152,9 +154,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
       const finalCarName = dictItem.master_sku;
 
-      // 3. Process the Data
       if (inventoryItem) {
-        // UPDATE Existing
         const newQuantity = transactionType === 'RESTOCK' 
           ? inventoryItem.quantity + 1 
           : Math.max(0, inventoryItem.quantity - 1); 
@@ -165,20 +165,17 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           .eq('inventory_id', inventoryItem.inventory_id);
 
         if (updateError) throw updateError;
-
       } else {
-        // INSERT New
         if (transactionType === 'SOLD_OFFLINE') {
           alert("Cannot sell: This item is not on your shelf yet.");
           setIsProcessing(false);
           return;
         }
 
-        // STRICT INSERT: Only seller_id, factory_barcode, and quantity
         const { error: insertError } = await supabase
           .from('live_inventory')
           .insert([{
-            seller_id: activeBossId, // FIXED
+            seller_id: activeBossId,
             factory_barcode: pendingScan, 
             quantity: 1
           }]);
@@ -186,7 +183,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         if (insertError) throw insertError;
       }
 
-      // 4. Ledger Update (Using boss_id as that's what we named the column in this table earlier)
       await supabase
         .from('inventory_transactions')
         .insert([{
@@ -244,7 +240,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
             <button onClick={() => setShowHistoryModal(true)} className="text-sm font-bold text-cyan-600">View All</button>
           </div>
           <div className="space-y-3">
-            {/* The empty array fallback prevents the `.slice` crash */}
             {(recentScans || []).slice(0, 3).map(scan => (
               <div key={scan.id} className="bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center border border-slate-100">
                 <div>
