@@ -107,15 +107,16 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
   // --- CONFIRM & SAVE TO DATABASE ---
   // --- CONFIRM & SAVE TO DATABASE ---
+  // --- CONFIRM & SAVE TO DATABASE ---
   const confirmTransaction = async () => {
     if (!pendingScan || !sessionData.boss_id || !transactionType) return;
     setIsProcessing(true);
 
     try {
-      // 1. Check live_inventory using exact column name: factory_barcode
+      // 1. Check if the item is already on the Boss's shelf
       const { data: inventoryItem, error: invError } = await supabase
         .from('live_inventory')
-        .select('*')
+        .select('id, quantity')
         .eq('boss_id', sessionData.boss_id)
         .eq('factory_barcode', pendingScan) 
         .maybeSingle();
@@ -124,68 +125,57 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
       let finalCarName = "Unknown Vehicle";
 
+      // 2. We MUST check the Dictionary to get the car name for the History Log
+      const { data: dictItem } = await supabase
+        .from('barcode_dictionary')
+        .select('master_sku')
+        .eq('factory_barcode', pendingScan)
+        .maybeSingle();
+
+      if (!dictItem) {
+        alert("Unrecognized Barcode! This glass does not exist in the master dictionary.");
+        setIsProcessing(false);
+        return;
+      }
+
+      finalCarName = dictItem.master_sku;
+
+      // 3. Update or Insert into Live Inventory (STRICTLY Boss ID & Barcode)
       if (inventoryItem) {
-        // --- SCENARIO A: ITEM FOUND -> UPDATE QUANTITY ---
-        finalCarName = inventoryItem.master_sku || inventoryItem.car_model || "Auto Glass";
-        
+        // --- SCENARIO A: UPDATE QUANTITY ---
         const newQuantity = transactionType === 'RESTOCK' 
           ? inventoryItem.quantity + 1 
-          : Math.max(0, inventoryItem.quantity - 1); // Prevents negative numbers
+          : Math.max(0, inventoryItem.quantity - 1); 
         
         const { error: updateError } = await supabase
           .from('live_inventory')
           .update({ quantity: newQuantity })
-          .eq('boss_id', sessionData.boss_id)
-          .eq('factory_barcode', pendingScan);
+          .eq('id', inventoryItem.id);
 
-        if (updateError) {
-          alert("Database Blocked the Quantity Update: " + updateError.message);
-          setIsProcessing(false);
-          return;
-        }
+        if (updateError) throw updateError;
 
       } else {
-        // --- SCENARIO B: ITEM NOT FOUND -> INSERT NEW ROW ---
+        // --- SCENARIO B: INSERT NEW ITEM ---
         if (transactionType === 'SOLD_OFFLINE') {
           alert("Cannot sell: This barcode is not in your inventory yet.");
           setIsProcessing(false);
           return;
         }
 
-        // Look up the name in the Master Dictionary
-        const { data: dictItem, error: dictError } = await supabase
-          .from('barcode_dictionary')
-          .select('master_sku')
-          .eq('factory_barcode', pendingScan)
-          .maybeSingle();
-
-        if (!dictItem) {
-          alert("Unrecognized Barcode! Not found in Master Dictionary.");
-          setIsProcessing(false);
-          return;
-        }
-
-        finalCarName = dictItem.master_sku;
-
-        // Insert brand new row using factory_barcode
+        // ONLY send boss_id, factory_barcode, and quantity!
         const { error: insertError } = await supabase
           .from('live_inventory')
           .insert([{
             boss_id: sessionData.boss_id,
             factory_barcode: pendingScan, 
-            master_sku: dictItem.master_sku, 
             quantity: 1
           }]);
 
-        if (insertError) {
-          alert("Database Blocked New Item Insert: " + insertError.message);
-          setIsProcessing(false);
-          return;
-        }
+        if (insertError) throw insertError;
       }
 
-      // 3. Write to the History Ledger
-      const { error: ledgerError } = await supabase
+      // 4. Write to the History Ledger
+      await supabase
         .from('inventory_transactions')
         .insert([{
           boss_id: sessionData.boss_id,
@@ -195,16 +185,14 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           transaction_type: transactionType
         }]);
 
-      if (ledgerError) console.error("Ledger Error:", ledgerError);
-
-      // Success cleanup & trigger UI Refresh
+      // Success cleanup
       setPendingScan(null);
       setTransactionType(null);
-      setRefreshTrigger(prev => prev + 1); // Forces the History list to update instantly
+      setRefreshTrigger(prev => prev + 1); 
       
-    } catch (err) {
-      console.error("Critical Transaction Error:", err);
-      alert("A critical error occurred processing this scan.");
+    } catch (err: any) {
+      console.error("Transaction Error:", err);
+      alert("Database Error: " + err.message);
     } finally {
       setIsProcessing(false);
     }
