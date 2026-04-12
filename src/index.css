@@ -1,0 +1,21 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply font-sans text-slate-800 antialiased;
+  }
+}
+
+@keyframes scan {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50% { transform: translateY(100%); opacity: 1; }
+}
+
+.animate-scan {
+  animation: scan 2s ease-in-out infinite;
+}

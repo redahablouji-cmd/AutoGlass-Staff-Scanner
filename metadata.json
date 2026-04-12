@@ -1,0 +1,5 @@
+{
+  "name": "AutoGlass Staff Scanner",
+  "description": "A mobile-first PWA for retail employees to scan and manage glass inventory.",
+  "requestFramePermissions": ["camera"]
+}
