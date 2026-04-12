@@ -1,5 +1,7 @@
 {
-  "name": "AutoGlass Staff Scanner",
+  "name": "GlassTrack Pro",
   "description": "A mobile-first PWA for retail employees to scan and manage glass inventory.",
-  "requestFramePermissions": ["camera"]
+  "requestFramePermissions": [
+    "camera"
+  ]
 }
