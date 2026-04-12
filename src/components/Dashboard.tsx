@@ -25,65 +25,72 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   // Safely grab either seller_id or boss_id depending on your retail_staff table structure
   const activeBossId = sessionData.seller_id || sessionData.boss_id; 
 
-  // --- CAMERA LOGIC ---
+  // --- HARDWARE-SAFE CAMERA LOGIC ---
   useEffect(() => {
-    if (scanMethod === 'camera') {
-      const scanner = new Html5Qrcode("camera-reader");
-      scannerRef.current = scanner;
+    let isMounted = true; // Safety switch to prevent ghost crashes
 
-      scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 300, height: 150 } },
-        (decodedText) => {
-          stopCamera(true);
-          setPendingScan(decodedText);
-        },
-        (error) => { /* ignore */ }
-      ).catch((err) => {
-        alert("Camera Error. Please check permissions.");
-        stopCamera(false);
-      });
+    if (scanMethod === 'camera') {
+      // WAIT 100ms for React to physically draw the black screen before turning on the lens
+      setTimeout(() => {
+        if (!isMounted) return;
+
+        const scanner = new Html5Qrcode("camera-reader");
+        scannerRef.current = scanner;
+
+        scanner.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 300, height: 150 } },
+          (decodedText) => {
+            if (!isMounted) return;
+            handleSuccessfulScan(decodedText);
+          },
+          (error) => { /* Ignore background frame errors */ }
+        ).catch((err) => {
+          if (!isMounted) return;
+          console.error("Camera Boot Error:", err);
+          alert("Camera blocked. Please refresh the page and allow permissions.");
+          stopCamera(false);
+        });
+      }, 100);
     }
 
+    // Cleanup function if the user aggressively closes the window
     return () => {
+      isMounted = false;
       if (scannerRef.current) {
         scannerRef.current.stop().then(() => scannerRef.current?.clear()).catch(() => {});
       }
     };
   }, [scanMethod]);
-// 🌟 THE SAFE, CRASH-PROOF STOP FUNCTION 🌟
+
+  // Handle a successful barcode read
+  const handleSuccessfulScan = async (text: string) => {
+    if (scannerRef.current) {
+      try {
+        await scannerRef.current.stop();
+        scannerRef.current.clear();
+      } catch (e) {}
+      scannerRef.current = null;
+    }
+    setScanMethod(null);
+    setPendingScan(text); // Locks in the barcode!
+  };
+
+  // Handle the user clicking the Cancel "X" button
   const stopCamera = async (isSuccess = false) => {
     if (scannerRef.current) {
       try {
-        // 1. Tell the physical camera to turn off, and WAIT for it to finish
+        // Safely ask the camera hardware to power down
         await scannerRef.current.stop();
-        // 2. Clear the video feed from memory
         scannerRef.current.clear();
       } catch (err) {
-        // Ignore errors if they clicked X while it was still booting up
-        console.log("Camera safely aborted.");
+        console.log("Camera safely aborted during boot sequence.");
       }
       scannerRef.current = null;
     }
     
-    // 3. NOW that the camera is safely off, tell React to close the UI window
     setScanMethod(null);
     if (!isSuccess) setTransactionType(null); 
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const html5QrCode = new Html5Qrcode("hidden-file-reader");
-    try {
-      const decodedText = await html5QrCode.scanFile(file, true);
-      setPendingScan(decodedText);
-    } catch (err) {
-      alert("Could not find a clear barcode in this image.");
-      setTransactionType(null);
-    }
-    if (fileInputRef.current) fileInputRef.current.value = ''; 
   };
 
   // --- SAFE HISTORY FETCH ---
