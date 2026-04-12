@@ -109,40 +109,36 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   // --- CONFIRM & SAVE TO DATABASE ---
   // --- CONFIRM & SAVE TO DATABASE ---
   // --- CONFIRM & SAVE TO DATABASE (LOUD DEBUG VERSION) ---
+  // --- CONFIRM & SAVE TO DATABASE ---
   const confirmTransaction = async () => {
-    // 1. LOUD SAFETY CHECKS
-    if (!pendingScan) return alert("FAIL: No barcode detected in memory.");
-    if (!transactionType) return alert("FAIL: App forgot if you clicked Add or Sell.");
-    if (!sessionData.boss_id) {
-      alert("CRITICAL FAIL: Your Staff account has no 'boss_id'! The app doesn't know whose inventory to update. Log out, fix the staff account in Supabase, and log back in.");
-      return;
-    }
-
+    if (!pendingScan || !sessionData.boss_id || !transactionType) return;
     setIsProcessing(true);
 
     try {
-      console.log("Searching for:", pendingScan, "for Boss:", sessionData.boss_id);
-
-      // 2. Check live_inventory
+      // 1. Check if the item is already on the Boss's shelf
+      // FIXED: Asked Supabase for 'inventory_id' instead of 'id'
       const { data: inventoryItem, error: invError } = await supabase
         .from('live_inventory')
-        .select('id, quantity')
+        .select('inventory_id, quantity') 
         .eq('boss_id', sessionData.boss_id)
         .eq('factory_barcode', pendingScan) 
         .maybeSingle();
 
-      if (invError) alert("Supabase Inventory Fetch Error: " + invError.message);
+      // If Supabase throws a schema error, stop immediately!
+      if (invError) {
+        alert("Database Error: " + invError.message);
+        setIsProcessing(false);
+        return; 
+      }
 
       let finalCarName = "Unknown Vehicle";
 
-      // 3. Check Dictionary
-      const { data: dictItem, error: dictError } = await supabase
+      // 2. Check the Dictionary to get the car name for the History Log
+      const { data: dictItem } = await supabase
         .from('barcode_dictionary')
         .select('master_sku')
         .eq('factory_barcode', pendingScan)
         .maybeSingle();
-
-      if (dictError) alert("Supabase Dictionary Error: " + dictError.message);
 
       if (!dictItem) {
         alert("Unrecognized Barcode! This glass does not exist in the master dictionary.");
@@ -152,49 +148,41 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
       finalCarName = dictItem.master_sku;
 
-      // 4. Update or Insert
+      // 3. Update or Insert into Live Inventory
       if (inventoryItem) {
-        // --- UPDATE ---
+        // --- SCENARIO A: UPDATE QUANTITY ---
         const newQuantity = transactionType === 'RESTOCK' 
           ? inventoryItem.quantity + 1 
           : Math.max(0, inventoryItem.quantity - 1); 
         
-        console.log("Updating item", inventoryItem.id, "to quantity:", newQuantity);
-
-        const { error: updateError, data: updateData } = await supabase
+        const { error: updateError } = await supabase
           .from('live_inventory')
           .update({ quantity: newQuantity })
-          .eq('id', inventoryItem.id)
-          .select(); // Ask Supabase to return the updated row
+          .eq('inventory_id', inventoryItem.inventory_id); // FIXED: Matches your table's primary key
 
         if (updateError) throw updateError;
-        if (!updateData || updateData.length === 0) alert("WARNING: Supabase didn't report an error, but it also didn't update the row. This is usually Row Level Security (RLS) blocking you.");
 
       } else {
-        // --- INSERT ---
+        // --- SCENARIO B: INSERT NEW ITEM ---
         if (transactionType === 'SOLD_OFFLINE') {
           alert("Cannot sell: This barcode is not in your inventory yet.");
           setIsProcessing(false);
           return;
         }
 
-        console.log("Inserting brand new item...");
-
-        const { error: insertError, data: insertData } = await supabase
+        const { error: insertError } = await supabase
           .from('live_inventory')
           .insert([{
             boss_id: sessionData.boss_id,
             factory_barcode: pendingScan, 
             quantity: 1
-          }])
-          .select(); // Ask Supabase to return the inserted row
+          }]);
 
         if (insertError) throw insertError;
-        if (!insertData || insertData.length === 0) alert("WARNING: Supabase silently blocked the insert. Check your RLS policies.");
       }
 
-      // 5. History Ledger
-      const { error: ledgerError } = await supabase
+      // 4. Write to the History Ledger
+      await supabase
         .from('inventory_transactions')
         .insert([{
           boss_id: sessionData.boss_id,
@@ -204,8 +192,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           transaction_type: transactionType
         }]);
 
-      if (ledgerError) alert("Ledger Error: " + ledgerError.message);
-
       // Success cleanup
       setPendingScan(null);
       setTransactionType(null);
@@ -213,16 +199,9 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       
     } catch (err: any) {
       console.error("Transaction Error:", err);
-      alert("Hard Database Error: " + err.message);
+      alert("Database Error: " + err.message);
     } finally {
       setIsProcessing(false);
-    }
-  };
-
-  const handleLogoutClick = () => {
-    if (window.confirm("Are you sure you want to sign out?")) {
-      localStorage.removeItem('staff_session');
-      onLogout();
     }
   };
 
