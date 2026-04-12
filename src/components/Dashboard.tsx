@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Html5Qrcode } from 'html5-qrcode'; // Using the CORE engine, not the ugly Scanner UI!
+import { Html5Qrcode } from 'html5-qrcode'; 
 import { supabase } from '../supabaseClient';
 import { Plus, Minus, LogOut, Clock, X, CheckCircle2, Camera as CameraIcon, Image as ImageIcon } from 'lucide-react';
 
@@ -8,7 +8,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ onLogout }: DashboardProps) {
-  // --- NEW STATE MACHINE ---
+  // --- STATE MACHINE ---
   const [transactionType, setTransactionType] = useState<'RESTOCK' | 'SOLD_OFFLINE' | null>(null);
   const [scanMethod, setScanMethod] = useState<'camera' | null>(null);
   const [pendingScan, setPendingScan] = useState<string | null>(null);
@@ -26,28 +26,25 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   // --- FULL SCREEN CAMERA LOGIC ---
   useEffect(() => {
     if (scanMethod === 'camera') {
-      // Create the scanner engine
       const scanner = new Html5Qrcode("camera-reader");
       scannerRef.current = scanner;
 
-      // Force it to use the back environment camera automatically
       scanner.start(
         { facingMode: "environment" },
         { fps: 10, qrbox: { width: 300, height: 150 } },
         (decodedText) => {
-          // SUCCESS: Stop the camera instantly and show confirmation
-          stopCamera();
+          // SUCCESS: Pass 'true' so we don't erase the Add/Sell choice!
+          stopCamera(true);
           setPendingScan(decodedText);
         },
         (error) => { /* Ignore background scanning errors */ }
       ).catch((err) => {
         console.error("Camera Error:", err);
         alert("Could not start the camera. Please check browser permissions.");
-        stopCamera();
+        stopCamera(false);
       });
     }
 
-    // Cleanup if component unmounts
     return () => {
       if (scannerRef.current) {
         scannerRef.current.stop().then(() => scannerRef.current?.clear()).catch(console.error);
@@ -55,7 +52,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     };
   }, [scanMethod]);
 
-  const stopCamera = () => {
+  const stopCamera = (isSuccess = false) => {
     if (scannerRef.current) {
       scannerRef.current.stop().then(() => {
         scannerRef.current?.clear();
@@ -63,8 +60,10 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       }).catch(console.error);
     }
     setScanMethod(null);
-    if (!pendingScan) {
-      setTransactionType(null); // If they cancel without scanning, reset everything
+    
+    // Only erase the Add/Sell choice if the user clicked Cancel
+    if (!isSuccess) {
+      setTransactionType(null); 
     }
   };
 
@@ -77,13 +76,13 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     try {
       const decodedText = await html5QrCode.scanFile(file, true);
       setPendingScan(decodedText);
-      setTransactionType(transactionType); // Keep the selected action
+      // We keep the transaction type alive here too!
     } catch (err) {
       alert("Could not find a clear barcode in this image. Please try another one.");
       setTransactionType(null);
     }
     
-    if (fileInputRef.current) fileInputRef.current.value = ''; // Reset input
+    if (fileInputRef.current) fileInputRef.current.value = ''; 
   };
 
   // --- FETCH HISTORY ---
@@ -149,11 +148,9 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
-      {/* Hidden elements required for the scanner engine */}
       <div id="hidden-file-reader" style={{ display: 'none' }}></div>
       <input type="file" accept="image/*" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
 
-      {/* HEADER */}
       <header className="bg-white px-6 py-4 flex justify-between items-center shadow-sm">
         <div>
           <h1 className="text-xl font-black text-slate-800 tracking-tight">AutoGlass Staff</h1>
@@ -165,8 +162,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       </header>
 
       <main className="p-6 max-w-md mx-auto space-y-8 mt-4">
-        
-        {/* VERTICAL MAIN BUTTONS */}
         <div className="flex flex-col gap-4">
           <button 
             onClick={() => setTransactionType('RESTOCK')}
@@ -183,7 +178,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           </button>
         </div>
 
-        {/* TODAY'S ACTIVITY */}
         <div>
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -214,11 +208,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         </div>
       </main>
 
-      {/* ----------------------------------------------------- */}
-      {/* MODALS AND OVERLAYS BELOW */}
-      {/* ----------------------------------------------------- */}
-
-      {/* 1. SELECTION MODAL (Camera vs Image) */}
+      {/* MODALS */}
       {transactionType && !scanMethod && !pendingScan && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center p-4 pb-10">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl animate-in slide-in-from-bottom-8">
@@ -226,7 +216,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
             <p className="text-slate-500 mb-6 font-medium">
               Action: <span className={`font-bold ${transactionType === 'RESTOCK' ? 'text-teal-600' : 'text-red-500'}`}>{transactionType === 'RESTOCK' ? 'ADD TO INVENTORY' : 'SOLD OFFLINE'}</span>
             </p>
-            
             <div className="flex flex-col gap-3">
               <button onClick={() => setScanMethod('camera')} className="flex items-center justify-center gap-3 w-full py-4 bg-slate-800 text-white rounded-2xl font-bold text-lg hover:bg-slate-900">
                 <CameraIcon className="w-6 h-6" /> Direct Camera
@@ -242,24 +231,19 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         </div>
       )}
 
-      {/* 2. FULL SCREEN LIVE CAMERA */}
       {scanMethod === 'camera' && (
         <div className="fixed inset-0 bg-black z-[100] flex flex-col">
-          {/* Top Bar overlay */}
           <div className="absolute top-0 left-0 right-0 p-6 flex justify-between items-center z-10 bg-gradient-to-b from-black/80 to-transparent">
             <span className="text-white font-bold tracking-wider">
               {transactionType === 'RESTOCK' ? 'SCAN TO ADD' : 'SCAN TO SELL'}
             </span>
-            <button onClick={stopCamera} className="p-3 bg-white/20 hover:bg-white/30 rounded-full text-white backdrop-blur-md transition-all">
+            {/* THIS BUTTON PASSES FALSE SO IT CANCELS PROPERLY */}
+            <button onClick={() => stopCamera(false)} className="p-3 bg-white/20 hover:bg-white/30 rounded-full text-white backdrop-blur-md transition-all">
               <X className="w-6 h-6" />
             </button>
           </div>
-
-          {/* The Camera feed container */}
           <div className="flex-1 flex flex-col justify-center items-center bg-black relative">
             <div id="camera-reader" className="w-full max-h-[80vh] overflow-hidden border-y-2 border-cyan-500/50"></div>
-            
-            {/* Visual targeting box */}
             <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
               <div className="w-[80%] h-[20%] border-2 border-cyan-400 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]"></div>
             </div>
@@ -267,7 +251,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         </div>
       )}
 
-      {/* 3. CONFIRMATION MODAL */}
       {pendingScan && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl">
@@ -293,7 +276,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         </div>
       )}
 
-      {/* 4. HISTORY MODAL */}
       {showHistoryModal && (
          <div className="fixed inset-0 bg-slate-50 z-[120] flex flex-col">
           <header className="bg-white px-6 py-4 flex items-center justify-between shadow-sm sticky top-0">
