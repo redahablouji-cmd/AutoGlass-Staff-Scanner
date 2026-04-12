@@ -16,6 +16,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [recentScans, setRecentScans] = useState<any[]>([]);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
   
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -102,7 +103,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       if (data) setRecentScans(data);
     };
     fetchHistory();
-  }, [transactionType]);
+  }, [refreshTrigger]); // <--- CHANGE THIS WORD
 
   // --- CONFIRM & SAVE TO DATABASE ---
   const confirmTransaction = async () => {
@@ -179,6 +180,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       // Success cleanup
       setPendingScan(null);
       setTransactionType(null);
+      setRefreshTrigger(prev => prev + 1);
       
     } catch (err) {
       console.error("Transaction Error:", err);
