@@ -106,85 +106,105 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   }, [refreshTrigger]); // <--- CHANGE THIS WORD
 
   // --- CONFIRM & SAVE TO DATABASE ---
+  // --- CONFIRM & SAVE TO DATABASE ---
   const confirmTransaction = async () => {
     if (!pendingScan || !sessionData.boss_id || !transactionType) return;
     setIsProcessing(true);
 
     try {
-      // 1. Look for the item in the Seller's actual inventory
-      // IMPORTANT: If your live_inventory table uses 'factory_barcode' instead of 'barcode', change it below!
+      // 1. Check live_inventory using exact column name: factory_barcode
       const { data: inventoryItem, error: invError } = await supabase
         .from('live_inventory')
         .select('*')
         .eq('boss_id', sessionData.boss_id)
-        .eq('barcode', pendingScan) // <-- Change 'barcode' to 'factory_barcode' if needed
-        .maybeSingle(); // This magic word prevents the crash if it returns 0 rows
+        .eq('factory_barcode', pendingScan) 
+        .maybeSingle();
+
+      if (invError) console.error("Inventory Fetch Error:", invError);
 
       let finalCarName = "Unknown Vehicle";
 
       if (inventoryItem) {
-        // --- SCENARIO A: ITEM IS ALREADY IN INVENTORY ---
+        // --- SCENARIO A: ITEM FOUND -> UPDATE QUANTITY ---
         finalCarName = inventoryItem.master_sku || inventoryItem.car_model || "Auto Glass";
         
-        // Don't let inventory drop below 0 on a sale
-        const newQuantity = transactionType === 'RESTOCK' ? inventoryItem.quantity + 1 : Math.max(0, inventoryItem.quantity - 1);
+        const newQuantity = transactionType === 'RESTOCK' 
+          ? inventoryItem.quantity + 1 
+          : Math.max(0, inventoryItem.quantity - 1); // Prevents negative numbers
         
-        await supabase
+        const { error: updateError } = await supabase
           .from('live_inventory')
           .update({ quantity: newQuantity })
-          .eq('id', inventoryItem.id);
+          .eq('boss_id', sessionData.boss_id)
+          .eq('factory_barcode', pendingScan);
+
+        if (updateError) {
+          alert("Database Blocked the Quantity Update: " + updateError.message);
+          setIsProcessing(false);
+          return;
+        }
 
       } else {
-        // --- SCENARIO B: ITEM IS NOT IN INVENTORY YET ---
+        // --- SCENARIO B: ITEM NOT FOUND -> INSERT NEW ROW ---
         if (transactionType === 'SOLD_OFFLINE') {
           alert("Cannot sell: This barcode is not in your inventory yet.");
           setIsProcessing(false);
           return;
         }
 
-        // If they are Adding (+), look it up in the Master Dictionary
-        const { data: dictItem } = await supabase
+        // Look up the name in the Master Dictionary
+        const { data: dictItem, error: dictError } = await supabase
           .from('barcode_dictionary')
           .select('master_sku')
           .eq('factory_barcode', pendingScan)
           .maybeSingle();
 
         if (!dictItem) {
-          alert("Unrecognized Barcode! Not found in Dictionary.");
+          alert("Unrecognized Barcode! Not found in Master Dictionary.");
           setIsProcessing(false);
           return;
         }
 
         finalCarName = dictItem.master_sku;
 
-        // Insert a brand new row into Live Inventory!
-        await supabase
+        // Insert brand new row using factory_barcode
+        const { error: insertError } = await supabase
           .from('live_inventory')
           .insert([{
             boss_id: sessionData.boss_id,
-            barcode: pendingScan, // <-- Change to 'factory_barcode' if needed to match your table
+            factory_barcode: pendingScan, 
             master_sku: dictItem.master_sku, 
             quantity: 1
           }]);
+
+        if (insertError) {
+          alert("Database Blocked New Item Insert: " + insertError.message);
+          setIsProcessing(false);
+          return;
+        }
       }
 
       // 3. Write to the History Ledger
-      await supabase.from('inventory_transactions').insert([{
-        boss_id: sessionData.boss_id,
-        staff_scanner_id: sessionData.scanner_id,
-        barcode: pendingScan,
-        car_model_snapshot: finalCarName,
-        transaction_type: transactionType
-      }]);
+      const { error: ledgerError } = await supabase
+        .from('inventory_transactions')
+        .insert([{
+          boss_id: sessionData.boss_id,
+          staff_scanner_id: sessionData.scanner_id,
+          barcode: pendingScan,
+          car_model_snapshot: finalCarName,
+          transaction_type: transactionType
+        }]);
 
-      // Success cleanup
+      if (ledgerError) console.error("Ledger Error:", ledgerError);
+
+      // Success cleanup & trigger UI Refresh
       setPendingScan(null);
       setTransactionType(null);
-      setRefreshTrigger(prev => prev + 1);
+      setRefreshTrigger(prev => prev + 1); // Forces the History list to update instantly
       
     } catch (err) {
-      console.error("Transaction Error:", err);
-      alert("An error occurred processing this scan.");
+      console.error("Critical Transaction Error:", err);
+      alert("A critical error occurred processing this scan.");
     } finally {
       setIsProcessing(false);
     }
