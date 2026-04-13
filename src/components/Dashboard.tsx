@@ -51,6 +51,24 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       activityDate.getFullYear() === today.getFullYear()
     );
   };
+  const playSuccessSound = () => {
+  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  const oscillator = audioCtx.createOscillator();
+  const gainNode = audioCtx.createGain();
+
+  oscillator.type = 'sine'; // A clean "pip" sound
+  oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // High pitch A5
+  
+  // Fade out quickly to make it a short "pip"
+  gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+  oscillator.connect(gainNode);
+  gainNode.connect(audioCtx.destination);
+
+  oscillator.start();
+  oscillator.stop(audioCtx.currentTime + 0.1);
+};
 
   // Filter the recentScans so the dashboard only shows today's items
   const todayActivities = (recentScans || []).filter(scan => isToday(scan.created_at));
@@ -70,12 +88,18 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           scanner.start(
             { facingMode: "environment" },
             { fps: 10, qrbox: { width: 300, height: 150 } },
-            (decodedText) => {
-              if (!isMounted) return;
-              stopCamera(true).then(() => {
-                setPendingScan(decodedText);
-              });
-            },
+            // inside your scanner.start logic:
+(decodedText) => {
+  if (!isMounted) return;
+  
+  // 1. Play the pip sound immediately
+  playSuccessSound();
+
+  // 2. Stop camera and process the scan
+  stopCamera(true).then(() => {
+    setPendingScan(decodedText);
+  });
+},
             (error) => { /* ignore background scan errors */ }
           ).catch((err) => {
             if (isMounted) {
