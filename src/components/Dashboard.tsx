@@ -12,7 +12,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   const [scanMethod, setScanMethod] = useState<'camera' | null>(null);
   const [pendingScan, setPendingScan] = useState<string | null>(null);
   
-  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  
   const [isProcessing, setIsProcessing] = useState(false);
   const [recentScans, setRecentScans] = useState<any[]>([]); 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -38,6 +38,22 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     setScanMethod(null);
     if (!isSuccess) setTransactionType(null); 
   };
+  // --- HISTORY MODAL & FILTER LOGIC ---
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+
+  const isToday = (dateString) => {
+    if (!dateString) return false;
+    const activityDate = new Date(dateString);
+    const today = new Date();
+    return (
+      activityDate.getDate() === today.getDate() &&
+      activityDate.getMonth() === today.getMonth() &&
+      activityDate.getFullYear() === today.getFullYear()
+    );
+  };
+
+  // Filter the recentScans so the dashboard only shows today's items
+  const todayActivities = (recentScans || []).filter(scan => isToday(scan.created_at));
 
   useEffect(() => {
     let isMounted = true;
@@ -237,26 +253,64 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         <div>
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2"><Clock className="w-5 h-5 text-slate-400" /> Today's Activity</h2>
-            <button onClick={() => setShowHistoryModal(true)} className="text-sm font-bold text-cyan-600">View All</button>
+            <button onClick={() => setShowHistoryModal(true)} className="text-sm font-bold text-cyan-600 hover:text-cyan-700">View All</button>
           </div>
+          
           <div className="space-y-3">
-            {(recentScans || []).slice(0, 3).map(scan => (
-              <div key={scan.id} className="bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center border border-slate-100">
-                <div>
-                  <p className="font-bold text-slate-800 text-sm">{scan.car_model_snapshot}</p>
-                  <p className="text-xs text-slate-400 font-mono mt-0.5">{scan.barcode} • {scan.created_at ? new Date(scan.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
-                </div>
-                <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-full ${scan.transaction_type === 'RESTOCK' ? 'bg-teal-50 text-teal-600' : 'bg-red-50 text-red-500'}`}>{scan.transaction_type}</span>
-              </div>
-            ))}
-            {(!recentScans || recentScans.length === 0) && (
+            {todayActivities.length === 0 ? (
               <p className="text-center text-slate-400 text-sm py-6 bg-white rounded-2xl border border-slate-100 border-dashed">No scans yet today.</p>
+            ) : (
+              todayActivities.map(scan => (
+                <div key={scan.id} className="bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center border border-slate-100">
+                  <div>
+                    <p className="font-bold text-slate-800 text-sm">{scan.car_model_snapshot}</p>
+                    <p className="text-xs text-slate-400 font-mono mt-0.5">{scan.barcode} • {scan.created_at ? new Date(scan.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                  </div>
+                  <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-full ${scan.transaction_type === 'RESTOCK' ? 'bg-teal-50 text-teal-600' : 'bg-red-50 text-red-500'}`}>
+                    {scan.transaction_type}
+                  </span>
+                </div>
+              ))
             )}
           </div>
         </div>
       </main>
 
       {/* MODALS */}
+      {/* COMPLETE HISTORY MODAL */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 bg-slate-50 z-[100] flex flex-col overflow-y-auto pb-8">
+          
+          {/* Header */}
+          <div className="sticky top-0 bg-white z-10 flex items-center justify-between px-6 py-5 border-b border-slate-100 shadow-sm">
+            <h2 className="text-xl font-bold text-slate-800">Complete History</h2>
+            <button onClick={() => setShowHistoryModal(false)} className="bg-slate-100 p-2 rounded-full text-slate-600 hover:bg-slate-200">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Full List of Everything */}
+          <div className="flex flex-col gap-3 px-6 pt-6">
+            {(recentScans || []).length === 0 ? (
+              <p className="text-slate-500 text-sm text-center mt-10">No history found.</p>
+            ) : (
+              (recentScans || []).map((scan) => (
+                <div key={scan.id} className="bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center border border-slate-100">
+                  <div>
+                    <p className="font-bold text-slate-800 text-sm">{scan.car_model_snapshot}</p>
+                    <p className="text-xs text-slate-400 font-mono mt-0.5">{scan.barcode} • {scan.created_at ? new Date(scan.created_at).toLocaleDateString() : ''} {scan.created_at ? new Date(scan.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                  </div>
+                  <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-full ${scan.transaction_type === 'RESTOCK' ? 'bg-teal-50 text-teal-600' : 'bg-red-50 text-red-500'}`}>
+                    {scan.transaction_type}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
       {transactionType && !scanMethod && !pendingScan && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center p-4 pb-10">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl animate-in slide-in-from-bottom-8">
@@ -270,6 +324,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           </div>
         </div>
       )}
+
 
       {scanMethod === 'camera' && (
         <div className="fixed inset-0 bg-black z-[100] flex flex-col">
