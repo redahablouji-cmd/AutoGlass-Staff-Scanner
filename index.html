@@ -23,7 +23,12 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js');
+          navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then((reg) => {
+              console.log('SW Registered!');
+              reg.update(); // Force it to check for the new manifest
+            })
+            .catch(err => console.log('SW Failed:', err));
         });
       }
     </script>
