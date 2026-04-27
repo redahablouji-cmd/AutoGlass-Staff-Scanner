@@ -79,15 +79,17 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     .slice(0, 8); // strictly limits the array to 8 items
 
   // --- GATEKEEPER EFFECT (REMOTE KILL SWITCH) ---
+  // --- GATEKEEPER EFFECT (REMOTE KILL SWITCH) ---
   useEffect(() => {
-    if (!staffDbId) return;
+    const myScannerId = sessionData.scanner_id;
+    if (!myScannerId) return;
 
-    // 1. Check status on load
+    // 1. Check status on load using the correct column: scanner_id
     const checkLockStatus = async () => {
       const { data } = await supabase
         .from('retail_staff')
         .select('status')
-        .eq('id', staffDbId)
+        .eq('scanner_id', myScannerId) // <--- WE LOOK IN THE SCANNER_ID COLUMN NOW
         .single();
         
       if (data && data.status !== 'Active') setIsLocked(true);
@@ -101,7 +103,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         event: 'UPDATE', 
         schema: 'public', 
         table: 'retail_staff', 
-        filter: `id=eq.${staffDbId}` 
+        filter: `scanner_id=eq.${myScannerId}` // <--- WE FILTER BY SCANNER_ID NOW
       }, (payload) => {
         if (payload.new.status !== 'Active') setIsLocked(true);
         if (payload.new.status === 'Active') setIsLocked(false);
@@ -109,7 +111,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       .subscribe();
 
     return () => { supabase.removeChannel(subscription); };
-  }, [staffDbId]);
+  }, [sessionData.scanner_id]);
 
   useEffect(() => {
     let isMounted = true;
