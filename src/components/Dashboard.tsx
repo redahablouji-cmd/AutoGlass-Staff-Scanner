@@ -22,7 +22,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   const sessionData = JSON.parse(localStorage.getItem('staff_session') || '{}');
   const staffName = sessionData.first_name || "Staff";
   const activeBossId = sessionData.seller_id || sessionData.boss_id; 
-  const staffDbId = sessionData.id; // The unique ID of this staff member in retail_staff
+  const staffDbId = sessionData.scanner_id; // WE MUST USE THE SCANNER ID!
 
   // --- GATEKEEPER STATE ---
   const [isLocked, setIsLocked] = useState(false);
@@ -283,26 +283,26 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     }
   };
 
-  // --- THE POISON PILL SCREEN ---
+  // --- THE POISON PILL SCREEN (WHITE THEME) ---
   if (isLocked) {
     return (
-      <div className="min-h-screen bg-red-700 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
-        <div className="text-7xl mb-6">🚫</div>
-        <h1 className="text-white text-3xl font-black mb-3 tracking-widest uppercase">Access Denied</h1>
-        <p className="text-red-100 text-lg font-medium leading-relaxed">
-          Your scanner profile has been temporarily locked. Please contact your manager to restore access.
+      <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
+        <div className="w-24 h-24 bg-slate-50 border border-slate-100 rounded-full flex items-center justify-center mb-6 shadow-sm">
+          <span className="text-5xl">🔒</span>
+        </div>
+        <h1 className="text-slate-800 text-2xl font-black mb-3 tracking-tight">Access Suspended</h1>
+        <p className="text-slate-500 text-base font-medium leading-relaxed max-w-xs mx-auto">
+          Please contact the manager or the responsible of the APP
         </p>
         <button 
           onClick={handleLogoutClick} 
-          className="mt-12 px-8 py-3.5 bg-red-900 hover:bg-red-950 text-white rounded-full font-bold shadow-lg transition-colors"
+          className="mt-10 px-8 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold shadow-md transition-colors"
         >
-          Sign Out
+          Return to Login
         </button>
       </div>
     );
   }
-
-  // --- NORMAL DASHBOARD RENDER ---
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
       <div id="hidden-file-reader" style={{ display: 'none' }}></div>
