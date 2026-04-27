@@ -12,7 +12,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   const [scanMethod, setScanMethod] = useState<'camera' | null>(null);
   const [pendingScan, setPendingScan] = useState<string | null>(null);
   
-  
   const [isProcessing, setIsProcessing] = useState(false);
   const [recentScans, setRecentScans] = useState<any[]>([]); 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -23,6 +22,10 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   const sessionData = JSON.parse(localStorage.getItem('staff_session') || '{}');
   const staffName = sessionData.first_name || "Staff";
   const activeBossId = sessionData.seller_id || sessionData.boss_id; 
+  const staffDbId = sessionData.id; // The unique ID of this staff member in retail_staff
+
+  // --- GATEKEEPER STATE ---
+  const [isLocked, setIsLocked] = useState(false);
 
   // --- HARDWARE-SAFE CAMERA LOGIC ---
   const stopCamera = async (isSuccess = false) => {
@@ -38,10 +41,10 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     setScanMethod(null);
     if (!isSuccess) setTransactionType(null); 
   };
-  // --- HISTORY MODAL & FILTER LOGIC ---
+
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
-  const isToday = (dateString) => {
+  const isToday = (dateString: string) => {
     if (!dateString) return false;
     const activityDate = new Date(dateString);
     const today = new Date();
@@ -51,33 +54,67 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       activityDate.getFullYear() === today.getFullYear()
     );
   };
+
   const playSuccessSound = () => {
-  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-  const oscillator = audioCtx.createOscillator();
-  const gainNode = audioCtx.createGain();
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
 
-  oscillator.type = 'sine'; // A clean "pip" sound
-  oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // High pitch A5
-  
-  // Fade out quickly to make it a short "pip"
-  gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-  gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+    oscillator.type = 'sine'; 
+    oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); 
+    
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
 
-  oscillator.connect(gainNode);
-  gainNode.connect(audioCtx.destination);
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
 
-  oscillator.start();
-  oscillator.stop(audioCtx.currentTime + 0.1);
-};
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.1);
+  };
 
-  // Filter the recentScans so the dashboard only shows today's items
-  const todayActivities = (recentScans || []).filter(scan => isToday(scan.created_at));
+  // --- NEW: FILTER TODAY AND LIMIT TO 8 ---
+  const todayActivities = (recentScans || [])
+    .filter(scan => isToday(scan.created_at))
+    .slice(0, 8); // strictly limits the array to 8 items
+
+  // --- GATEKEEPER EFFECT (REMOTE KILL SWITCH) ---
+  useEffect(() => {
+    if (!staffDbId) return;
+
+    // 1. Check status on load
+    const checkLockStatus = async () => {
+      const { data } = await supabase
+        .from('retail_staff')
+        .select('status')
+        .eq('id', staffDbId)
+        .single();
+        
+      if (data && data.status !== 'Active') setIsLocked(true);
+    };
+    checkLockStatus();
+
+    // 2. Listen for the manager clicking the Lock button in real-time
+    const subscription = supabase
+      .channel('public:retail_staff')
+      .on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'retail_staff', 
+        filter: `id=eq.${staffDbId}` 
+      }, (payload) => {
+        if (payload.new.status !== 'Active') setIsLocked(true);
+        if (payload.new.status === 'Active') setIsLocked(false);
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(subscription); };
+  }, [staffDbId]);
 
   useEffect(() => {
     let isMounted = true;
 
     if (scanMethod === 'camera') {
-      // Give React 150ms to physically draw the black screen before turning on the lens
       setTimeout(() => {
         if (!isMounted) return;
         
@@ -88,18 +125,13 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           scanner.start(
             { facingMode: "environment" },
             { fps: 10, qrbox: { width: 300, height: 150 } },
-            // inside your scanner.start logic:
-(decodedText) => {
-  if (!isMounted) return;
-  
-  // 1. Play the pip sound immediately
-  playSuccessSound();
-
-  // 2. Stop camera and process the scan
-  stopCamera(true).then(() => {
-    setPendingScan(decodedText);
-  });
-},
+            (decodedText) => {
+              if (!isMounted) return;
+              playSuccessSound();
+              stopCamera(true).then(() => {
+                setPendingScan(decodedText);
+              });
+            },
             (error) => { /* ignore background scan errors */ }
           ).catch((err) => {
             if (isMounted) {
@@ -113,7 +145,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       }, 150); 
     }
 
-    // Cleanup: If user hits Back or closes app, force camera off safely
     return () => {
       isMounted = false;
       if (scannerRef.current) {
@@ -122,7 +153,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     };
   }, [scanMethod]);
 
-  // --- IMAGE FILE LOGIC ---
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -138,18 +168,21 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     if (fileInputRef.current) fileInputRef.current.value = ''; 
   };
 
-  // --- SAFE HISTORY FETCH ---
+  // --- NEW: 30-DAY SAFE HISTORY FETCH ---
   useEffect(() => {
     const fetchHistory = async () => {
       if (!activeBossId) return;
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      
+      // Look back 30 days instead of just today
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      thirtyDaysAgo.setHours(0, 0, 0, 0);
 
       const { data, error } = await supabase
         .from('inventory_transactions')
         .select('*')
         .eq('staff_scanner_id', sessionData.scanner_id)
-        .gte('created_at', today.toISOString())
+        .gte('created_at', thirtyDaysAgo.toISOString())
         .order('created_at', { ascending: false });
 
       if (error || !data) {
@@ -161,7 +194,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     fetchHistory();
   }, [refreshTrigger, activeBossId, sessionData.scanner_id]);
 
-  // --- STRICT DATABASE TRANSACTION ---
   const confirmTransaction = async () => {
     if (!pendingScan || !activeBossId || !transactionType) return;
     setIsProcessing(true);
@@ -251,6 +283,26 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     }
   };
 
+  // --- THE POISON PILL SCREEN ---
+  if (isLocked) {
+    return (
+      <div className="min-h-screen bg-red-700 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
+        <div className="text-7xl mb-6">🚫</div>
+        <h1 className="text-white text-3xl font-black mb-3 tracking-widest uppercase">Access Denied</h1>
+        <p className="text-red-100 text-lg font-medium leading-relaxed">
+          Your scanner profile has been temporarily locked. Please contact your manager to restore access.
+        </p>
+        <button 
+          onClick={handleLogoutClick} 
+          className="mt-12 px-8 py-3.5 bg-red-900 hover:bg-red-950 text-white rounded-full font-bold shadow-lg transition-colors"
+        >
+          Sign Out
+        </button>
+      </div>
+    );
+  }
+
+  // --- NORMAL DASHBOARD RENDER ---
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-20">
       <div id="hidden-file-reader" style={{ display: 'none' }}></div>
@@ -301,40 +353,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       </main>
 
       {/* MODALS */}
-      {/* COMPLETE HISTORY MODAL */}
-      {showHistoryModal && (
-        <div className="fixed inset-0 bg-slate-50 z-[100] flex flex-col overflow-y-auto pb-8">
-          
-          {/* Header */}
-          <div className="sticky top-0 bg-white z-10 flex items-center justify-between px-6 py-5 border-b border-slate-100 shadow-sm">
-            <h2 className="text-xl font-bold text-slate-800">Complete History</h2>
-            <button onClick={() => setShowHistoryModal(false)} className="bg-slate-100 p-2 rounded-full text-slate-600 hover:bg-slate-200">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-
-          {/* Full List of Everything */}
-          <div className="flex flex-col gap-3 px-6 pt-6">
-            {(recentScans || []).length === 0 ? (
-              <p className="text-slate-500 text-sm text-center mt-10">No history found.</p>
-            ) : (
-              (recentScans || []).map((scan) => (
-                <div key={scan.id} className="bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center border border-slate-100">
-                  <div>
-                    <p className="font-bold text-slate-800 text-sm">{scan.car_model_snapshot}</p>
-                    <p className="text-xs text-slate-400 font-mono mt-0.5">{scan.barcode} • {scan.created_at ? new Date(scan.created_at).toLocaleDateString() : ''} {scan.created_at ? new Date(scan.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
-                  </div>
-                  <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-full ${scan.transaction_type === 'RESTOCK' ? 'bg-teal-50 text-teal-600' : 'bg-red-50 text-red-500'}`}>
-                    {scan.transaction_type}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
       {transactionType && !scanMethod && !pendingScan && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center p-4 pb-10">
           <div className="bg-white rounded-3xl p-6 w-full max-w-sm text-center shadow-2xl animate-in slide-in-from-bottom-8">
@@ -348,7 +366,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           </div>
         </div>
       )}
-
 
       {scanMethod === 'camera' && (
         <div className="fixed inset-0 bg-black z-[100] flex flex-col">
@@ -381,8 +398,9 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         </div>
       )}
 
+      {/* CLEANED UP SINGLE HISTORY MODAL */}
       {showHistoryModal && (
-         <div className="fixed inset-0 bg-slate-50 z-[120] flex flex-col">
+        <div className="fixed inset-0 bg-slate-50 z-[120] flex flex-col">
           <header className="bg-white px-6 py-4 flex items-center justify-between shadow-sm sticky top-0">
             <h2 className="text-xl font-black text-slate-800">Complete History</h2>
             <button onClick={() => setShowHistoryModal(false)} className="p-2 bg-slate-100 rounded-full text-slate-500"><X className="w-5 h-5" /></button>
@@ -392,7 +410,8 @@ export default function Dashboard({ onLogout }: DashboardProps) {
                <div key={`modal-${scan.id}`} className="bg-white p-4 rounded-2xl shadow-sm flex justify-between items-center border border-slate-100">
                  <div>
                    <p className="font-bold text-slate-800 text-sm">{scan.car_model_snapshot}</p>
-                   <p className="text-xs text-slate-400 font-mono mt-0.5">{scan.barcode} • {scan.created_at ? new Date(scan.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
+                   {/* Notice here: Shows both the Date AND the Time so they know exactly when it happened in the last 30 days */}
+                   <p className="text-xs text-slate-400 font-mono mt-0.5">{scan.barcode} • {scan.created_at ? new Date(scan.created_at).toLocaleDateString() : ''} {scan.created_at ? new Date(scan.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''}</p>
                  </div>
                  <span className={`text-[10px] font-black tracking-wider uppercase px-2.5 py-1 rounded-full ${scan.transaction_type === 'RESTOCK' ? 'bg-teal-50 text-teal-600' : 'bg-red-50 text-red-500'}`}>{scan.transaction_type}</span>
                </div>
